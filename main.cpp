@@ -6,6 +6,9 @@
 #include <unordered_map>
 #include <list>
 #include <algorithm>
+#include "piCalc/parser/ptParse/ptParse.hpp"
+#include "piCalc/mathEngine/expr.hpp"
+#include "piCalc/mathEngine/simplify.hpp"
 
 struct MyVec3{float x,y,z;};
 
@@ -224,10 +227,6 @@ GLuint CreateShaderProgram(const char* vertexShaderSource, const char* fragmentS
  *
 ******************************************************************************/
 
-// See https://www.shadertoy.com/view/Ms2SD1 / Many thanks to Alexander Alekseev aka TDM
-// This is an old shader, so it uses GLSL 100
-
-
 const char* GVertexShaderSource = R"(#version 100
 precision mediump float;
 attribute vec3 aPos;
@@ -242,7 +241,7 @@ void main()
 }
 )";
 
-const char* GFragmentShaderSource = R"(#version 100
+std::string_view GFragShaderTop = R"(#version 100
 precision mediump float;
 
 varying vec2 TexCoord;
@@ -267,31 +266,11 @@ void main()
 // Normalized pixel coordinates (from 0 to 1)
     vec2 uv = fragCoord/iResolution.xy;
 
-    // Time varying pixel color
-    vec3 col = 0.5 + 0.5*cos(iTime+uv.xyx+vec3(0,2,4));
-
-    // Output to screen
-    gl_FragColor = vec4(col,1.0);
-}
+    vec2 pos = uv * cameraZoom + cameraOffset.xy;
 )";
 
-//temporary
-const char* GFragmentShaderSource2 = R"(#version 100
-precision mediump float;
-
-varying vec2 TexCoord;
-
-uniform vec2 iResolution;  // Window resolution
-uniform float iTime;      // Shader elapsed time
-uniform vec2 iMouse;      // Mouse position
-
-uniform vec3 cameraOffset;
-uniform float cameraZoom;
-
-void main()
-{
-    // Output to screen
-    gl_FragColor = vec4(1.0, 0.0, 0.0,1.0);
+std::string_view GFragShaderBottom = R"(
+    gl_FragColor = vec4(col,1.0);
 }
 )";
 
@@ -311,6 +290,8 @@ struct AppState
     struct calcEntry{
 	MyVec3 color;
 	std::string eq;
+	std::optional<std::variant<mathEngine::equation, std::shared_ptr<mathEngine::expr>>> parsedEq = std::nullopt;
+	std::optional<std::variant<mathEngine::equation, std::shared_ptr<mathEngine::expr>>> reducedEq = std::nullopt;
 	bool guiFocused = false;
     };
     std::list<calcEntry> entries;
@@ -335,7 +316,7 @@ struct AppState
 
 void InitAppResources3D(AppState& appState)
 {
-    appState.ShaderProgram = CreateShaderProgram(GVertexShaderSource, GFragmentShaderSource);
+    appState.ShaderProgram = CreateShaderProgram(GVertexShaderSource, (std::string(GFragShaderTop) + "vec3 col = vec3(1.0, 1.0, 1.0);" + std::string(GFragShaderBottom)).c_str());
     appState.FullScreenQuadVAO = CreateFullScreenQuadVAO();
     appState.StoreUniformLocations();
 }
@@ -403,15 +384,43 @@ void Gui(AppState& appState)
 
     ImGui::Text("FPS: %.1f", HelloImGui::FrameRate());
 
-    if(ImGui::Button("refresh shader program"))
-  	  appState.ShaderProgram = CreateShaderProgram(GVertexShaderSource, GFragmentShaderSource2);
+    bool someEntryChanged = false;
 
     //note:  the entryNum names are matching so focus stays after inputting a new eq
     unsigned int entryNum = 1;
     for(auto& entry : appState.entries){
-	    ImGui::InputText(("entry " + std::to_string(entryNum) + "###entryNum" + std::to_string(entryNum)).c_str(), &entry.eq);
-	    entry.guiFocused = ImGui::IsItemFocused();//make sure to delete entries only if they are not being currently worked on
-	    ImGui::ColorEdit3(("draw color###colorNum" + std::to_string(entryNum)).c_str(), (float*)&entry.color);//janky pointer hack, works well enough
+	    if(ImGui::InputText(("entry " + std::to_string(entryNum) + "###entryNum" + std::to_string(entryNum)).c_str(), &entry.eq)){
+		    //try to compile the new code
+		    auto parsed = parser::ptParse::parse(entry.eq);
+		    if(parsed){
+			    someEntryChanged = true;
+			    entry.parsedEq = parsed->value;
+			    if(std::holds_alternative<mathEngine::equation>(*entry.parsedEq)){
+				const auto& eq = std::get<mathEngine::equation>(*entry.parsedEq);
+				entry.reducedEq = mathEngine::fullySimplify(eq.clone());	
+			    }
+			    if(std::holds_alternative<std::shared_ptr<mathEngine::expr>>(*entry.parsedEq)){
+				const auto& eq = std::get<std::shared_ptr<mathEngine::expr>>(*entry.parsedEq);
+				entry.reducedEq = mathEngine::fullySimplify(eq->clone());	
+			    }
+		    }
+	    }
+	    entry.guiFocused = ImGui::IsItemFocused();//make ImGuiTextEditCallbackData* datasure to delete entries only if they are not being currently worked on
+	    if(entry.parsedEq){
+		    if(std::holds_alternative<mathEngine::equation>(*entry.parsedEq))
+			    ImGui::Text("Parsed input: %s", std::get<mathEngine::equation>(*entry.parsedEq).toLatex().c_str());
+		    if(std::holds_alternative<std::shared_ptr<mathEngine::expr>>(*entry.parsedEq))
+			    ImGui::Text("Parsed input: %s", std::get<std::shared_ptr<mathEngine::expr>>(*entry.parsedEq)->toLatex().c_str());
+	    }
+	    if(entry.reducedEq){
+		    if(std::holds_alternative<mathEngine::equation>(*entry.reducedEq))
+			    ImGui::Text("Reduced: %s", std::get<mathEngine::equation>(*entry.reducedEq).toLatex().c_str());
+		    if(std::holds_alternative<std::shared_ptr<mathEngine::expr>>(*entry.reducedEq))
+			    ImGui::Text("Reduced: %s", std::get<std::shared_ptr<mathEngine::expr>>(*entry.reducedEq)->toLatex().c_str());
+	    }
+	    if(ImGui::ColorEdit3(("draw color###colorNum" + std::to_string(entryNum)).c_str(), (float*)&entry.color)){//janky pointer hack, works well enough
+	    	someEntryChanged = true;
+	    }
 	    ImGui::SeparatorText("");
 	    entryNum++;
     }
@@ -423,7 +432,32 @@ void Gui(AppState& appState)
 		next.clear();
     }
 
-    std::erase_if(appState.entries, [](const auto& entry){return entry.eq.empty() && !entry.guiFocused;});
+    std::erase_if(appState.entries, [&](const auto& entry)mutable{
+		    if(entry.eq.empty() && !entry.guiFocused){
+			someEntryChanged = true;
+			return true;
+		    }else{
+			return false;
+		    }});
+
+    if(someEntryChanged){
+	  std::string newFragShader;
+	  newFragShader += GFragShaderTop;
+	  newFragShader += "int numEntries = " + std::to_string(appState.entries.size()) + ";\n";
+	  newFragShader += "vec3 entryColors[" + std::to_string(appState.entries.size()) + "];\n";
+	  std::string colorsEntry;
+	  unsigned int i=0;
+	  for(const auto& entry : appState.entries){
+		colorsEntry += "entryColors[" + std::to_string(i) + "] = vec3(" + std::to_string(entry.color.x) + ", " + std::to_string(entry.color.y) + ", " + std::to_string(entry.color.z) + ");\n";
+		i++;
+	  }
+	  newFragShader += colorsEntry;
+	  newFragShader += "vec3 col = 0.5 + 0.5*cos(pow(" + std::to_string(entryNum) + ".0,2.0)*iTime+uv.xyx+vec3(0,2,4));";
+
+	  newFragShader += GFragShaderBottom;
+	  std::cout<<"Recompiling shader: "<<newFragShader<<std::endl;
+  	  appState.ShaderProgram = CreateShaderProgram(GVertexShaderSource, newFragShader.c_str());
+    }
 
     ImGui::End();
 }

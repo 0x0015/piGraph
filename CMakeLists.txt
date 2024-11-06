@@ -28,6 +28,12 @@ endif()
 # ==============
 hello_imgui_add_app(piGraph main.cpp)
 
+add_library(piCalc STATIC IMPORTED)
+set_target_properties(piCalc PROPERTIES IMPORTED_LOCATION "piCalc/piCalc.a")
+#set_target_properties(piCalc PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "./piCalc")
+
+target_link_libraries(piGraph PRIVATE piCalc)
+
 
 # hello_imgui_add_app is a helper function, similar to cmake's "add_executable"
 # Usage:
