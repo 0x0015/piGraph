@@ -1,224 +1,14 @@
 #include "hello_imgui/hello_imgui.h"
 #include "hello_imgui/hello_imgui_include_opengl.h"
+#include "shaderUtil.hpp"
 #include "imgui_stdlib.h"
 #include <iostream>
 #include <memory>
-#include <unordered_map>
 #include <list>
 #include <algorithm>
 #include "piCalc/parser/ptParse/ptParse.hpp"
 #include "piCalc/mathEngine/expr.hpp"
 #include "piCalc/mathEngine/simplify.hpp"
-
-struct MyVec3{float x,y,z;};
-
-// Helper struct for checking if a type is supported (typical C++ shenanigans)
-template<class T> struct UnsupportedType : std::false_type {};
-
-// Transmit any uniform type to the shader
-template<typename T>
-void ApplyUniform(GLint location, const T& value)
-{
-    if constexpr (std::is_same<T, int>::value)
-        glUniform1i(location, value);
-    else if constexpr (std::is_same<T, float>::value)
-        glUniform1f(location, value);
-    else if constexpr (std::is_same<T, double>::value)
-        glUniform1d(location, value);
-    else if constexpr (std::is_same<T, MyVec3>::value)
-        glUniform3fv(location, 1, &value.x);
-    else if constexpr (std::is_same<T, ImVec2>::value)
-        glUniform2fv(location, 1, &value.x);
-    else if constexpr (std::is_same<T, ImVec4>::value)
-        glUniform4fv(location, 1, &value.x);
-    else
-        static_assert(UnsupportedType<T>::value, "Unsupported type");
-}
-
-
-// Base uniform class: can be used to store a uniform of any type
-struct IUniform
-{
-    GLint location = 0;
-
-    void StoreLocation(GLuint shaderProgram, const std::string& name)
-    {
-        location = glGetUniformLocation(shaderProgram, name.c_str());
-    }
-
-    virtual ~IUniform() {}
-
-    virtual void Apply() = 0;
-};
-
-
-// Concrete uniform class: can be used to store a uniform of a specific type
-template<typename T>
-struct Uniform : public IUniform
-{
-    T value;
-    Uniform(const T& initialValue): IUniform(), value(initialValue) {}
-    void Apply() override { ApplyUniform(location, value); }
-};
-
-
-// Helper struct to store a list of uniforms
-struct UniformsList
-{
-    std::unordered_map<std::string, std::unique_ptr<IUniform>> Uniforms;
-
-    template<typename T> void AddUniform(const std::string& name, const T& initialValue)
-    {
-        Uniforms[name] = std::make_unique<Uniform<T>>(initialValue);
-    }
-
-    void StoreUniformLocations(GLuint shaderProgram)
-    {
-        for (auto& uniform : Uniforms)
-            uniform.second->StoreLocation(shaderProgram, uniform.first);
-    }
-
-    void ApplyUniforms()
-    {
-        for (auto& uniform : Uniforms)
-            uniform.second->Apply();
-    }
-
-    // UniformValue returns a modifiable reference to the uniform value
-    template<typename T> T& UniformValue(const std::string& name)
-    {
-        IM_ASSERT(Uniforms.find(name) != Uniforms.end());
-        auto& uniform = Uniforms[name];
-        Uniform<T>* asT = dynamic_cast<Uniform<T>*>(uniform.get());
-        IM_ASSERT(asT != nullptr);
-        return asT->value;
-    }
-
-    template<typename T> void SetUniformValue(const std::string& name, const T& value)
-    {
-        IM_ASSERT(Uniforms.find(name) != Uniforms.end());
-        auto& uniform = Uniforms[name];
-        Uniform<T>* asT = dynamic_cast<Uniform<T>*>(uniform.get());
-        IM_ASSERT(asT != nullptr);
-        asT->value = value;
-    }
-};
-
-
-/******************************************************************************
- *
- * Shader Utilities
- *
-******************************************************************************/
-
-void FailOnShaderLinkError(GLuint shaderProgram)
-{
-    GLint isLinked;
-    glGetProgramiv(shaderProgram, GL_LINK_STATUS, &isLinked);
-    if (!isLinked) {
-        GLchar infoLog[512];
-        glGetProgramInfoLog(shaderProgram, 512, NULL, infoLog);
-        std::cerr << "ERROR::SHADER::PROGRAM::LINKING_FAILED\n" << infoLog << std::endl;
-        IM_ASSERT(isLinked);
-    }
-}
-
-void FailOnShaderCompileError(GLuint shader)
-{
-    GLint shaderCompileSuccess;
-    glGetShaderiv(shader, GL_COMPILE_STATUS, &shaderCompileSuccess);
-    if (!shaderCompileSuccess)
-    {
-        GLchar infoLog[512];
-        glGetShaderInfoLog(shader, 512, NULL, infoLog);
-        std::cerr << "ERROR::SHADER::VERTEX::COMPILATION_FAILED\n" << infoLog << std::endl;
-        IM_ASSERT(shaderCompileSuccess);
-    }
-}
-
-void FailOnOpenGlError()
-{
-    int countOpenGlError = 0;
-    GLenum err;
-    while ((err = glGetError()) != GL_NO_ERROR)
-    {
-        std::cerr << "OpenGL error: " << err << std::endl;
-        ++countOpenGlError;
-    }
-    IM_ASSERT(countOpenGlError == 0);
-}
-
-GLuint CompileShader(GLuint type, const char* source)
-{
-    GLuint shader = glCreateShader(type);
-    glShaderSource(shader, 1, &source, NULL);
-    glCompileShader(shader);
-    FailOnShaderCompileError(shader);
-    return shader;
-}
-
-GLuint CreateFullScreenQuadVAO()
-{
-    // Define the vertex data for a full-screen quad
-    float vertices[] = {
-        // positions   // texCoords
-        -1.0f, -1.0f,  0.0f, 0.0f, // bottom left  (0)
-        1.0f, -1.0f,  1.0f, 0.0f, // bottom right (1)
-        -1.0f,  1.0f,  0.0f, 1.0f, // top left     (2)
-        1.0f,  1.0f,  1.0f, 1.0f  // top right    (3)
-    };
-    // Generate and bind the VAO
-    GLuint vao;
-    glGenVertexArrays(1, &vao);
-    glBindVertexArray(vao);
-
-    // Generate and bind the VBO
-    GLuint vbo;
-    glGenBuffers(1, &vbo);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo);
-
-    // Fill the VBO with vertex data
-    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-
-    // Set the vertex attribute pointers
-    // Position attribute
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
-    glEnableVertexAttribArray(0);
-    // Texture coordinate attribute
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
-    glEnableVertexAttribArray(1);
-
-    // Unbind the VAO (and VBO)
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
-    glBindVertexArray(0);
-
-    // Check for any OpenGL errors
-    FailOnOpenGlError();
-
-    return vao;
-}
-
-GLuint CreateShaderProgram(const char* vertexShaderSource, const char* fragmentShaderSource)
-{
-    GLuint vertexShader = CompileShader(GL_VERTEX_SHADER, vertexShaderSource);
-    GLuint fragmentShader = CompileShader(GL_FRAGMENT_SHADER, fragmentShaderSource);
-
-    // Create shader program
-    GLuint shaderProgram = glCreateProgram();
-    glAttachShader(shaderProgram, vertexShader);
-    glAttachShader(shaderProgram, fragmentShader);
-    glLinkProgram(shaderProgram);
-    FailOnShaderLinkError(shaderProgram);
-
-    // Delete shader objects once linked
-    glDeleteShader(vertexShader);
-    glDeleteShader(fragmentShader);
-
-    // Check for any OpenGL errors
-    FailOnOpenGlError();
-
-    return shaderProgram;
-}
 
 
 /******************************************************************************
@@ -236,8 +26,8 @@ varying vec2 TexCoord;
 
 void main()
 {
-    gl_Position = vec4(aPos, 1.0);
-    TexCoord = aTexCoord;
+	gl_Position = vec4(aPos, 1.0);
+	TexCoord = aTexCoord;
 }
 )";
 
@@ -250,27 +40,41 @@ uniform vec2 iResolution;  // Window resolution
 uniform float iTime;      // Shader elapsed time
 uniform vec2 iMouse;      // Mouse position
 
-uniform vec3 cameraOffset;
-uniform float cameraZoom;
+uniform vec2 viewStart;
+uniform vec2 viewSize;
+
+uniform float EPSILON;
 
 void main()
 {
-    vec2 fragCoord = TexCoord * iResolution;
-    float time = iTime * 0.3 + iMouse.x * 0.01;
+	vec2 fragCoord = TexCoord * iResolution;
+	float time = iTime * 0.3 + iMouse.x * 0.01;
 
-    // Compute uv based on fragCoord
-    //    vec2 uv = fragCoord / iResolution.xy;
-    //    uv = uv * 2.0 - 1.0;
-    //    uv.x *= iResolution.x / iResolution.y;
+	// Compute uv based on fragCoord
+	//    vec2 uv = fragCoord / iResolution.xy;
+	//    uv = uv * 2.0 - 1.0;
+	//    uv.x *= iResolution.x / iResolution.y;
 
-// Normalized pixel coordinates (from 0 to 1)
-    vec2 uv = fragCoord/iResolution.xy;
+	// Normalized pixel coordinates (from 0 to 1)
+	vec2 uv = fragCoord/iResolution.xy;
 
-    vec2 pos = uv * cameraZoom + cameraOffset.xy;
+	vec2 pos = viewStart + vec2(uv.x * viewSize.x, uv.y * viewSize.y);
+	float x = pos.x;
+	float y = pos.y;
+
+	vec3 col = vec3(1.0, 1.0, 1.0);
 )";
 
 std::string_view GFragShaderBottom = R"(
-    gl_FragColor = vec4(col,1.0);
+	if(col.x > (1.0-EPSILON) && col.y > (1.0-EPSILON) && col.z > (1.0-EPSILON)){
+		if(mod(pos.x, 1.0) < EPSILON || mod(pos.y, 1.0) < EPSILON){
+			col = vec3(0.0, 0.0, 0.0);
+		}
+	}
+	if(abs(pos.x) < EPSILON * 2.0 || abs(pos.y) < EPSILON * 2.0){
+		col = vec3(0.0, 0.0, 0.0);
+	}
+	gl_FragColor = vec4(col,1.0);
 }
 )";
 
@@ -295,14 +99,19 @@ struct AppState
 	bool guiFocused = false;
     };
     std::list<calcEntry> entries;
+    float viewZoom = 5.0f;
+    float graphThickness = 2.0f;
+    float majorLineThickness = 2.0f;
+    float minorLineThickness = 1.0f;
 
     AppState()
     {
-        Uniforms.AddUniform("cameraOffset", MyVec3{0, 0, 0});
-        Uniforms.AddUniform("cameraZoom", 1);
+        Uniforms.AddUniform("viewStart", ImVec2{0, 0});
+        Uniforms.AddUniform("viewSize", ImVec2{1, 1});
+	Uniforms.AddUniform("EPSILON", 0.01f);
 
         Uniforms.AddUniform("iResolution", ImVec2{100.f, 100.f});
-        Uniforms.AddUniform("iTime", 0.f);
+        Uniforms.AddUniform("iTime", 0.0f);
         Uniforms.AddUniform("iMouse", ImVec2{0.f, 0.f});
     }
 
@@ -316,9 +125,9 @@ struct AppState
 
 void InitAppResources3D(AppState& appState)
 {
-    appState.ShaderProgram = CreateShaderProgram(GVertexShaderSource, (std::string(GFragShaderTop) + "vec3 col = vec3(1.0, 1.0, 1.0);" + std::string(GFragShaderBottom)).c_str());
-    appState.FullScreenQuadVAO = CreateFullScreenQuadVAO();
-    appState.StoreUniformLocations();
+	appState.ShaderProgram = CreateShaderProgram(GVertexShaderSource, (std::string(GFragShaderTop) +std::string(GFragShaderBottom)).c_str());
+	appState.FullScreenQuadVAO = CreateFullScreenQuadVAO();
+	appState.StoreUniformLocations();
 }
 
 
@@ -381,11 +190,46 @@ void Gui(AppState& appState)
     //     `uniforms.UniformValue<T>(name)`
     //     returns a modifiable reference to a uniform value
     auto& uniforms = appState.Uniforms;
+    ImVec2& viewStart = uniforms.UniformValue<ImVec2>("viewStart");
+    ImVec2& viewSize = uniforms.UniformValue<ImVec2>("viewSize");
+    float& EPSILON = uniforms.UniformValue<float>("EPSILON");
+
+    static bool wasWindowFocusedLastFrame = false;
+    if(!ImGui::IsAnyItemActive() && !ImGui::IsAnyItemFocused() && !ImGui::IsAnyItemHovered() && !wasWindowFocusedLastFrame){
+	    auto mousePos = ImGui::GetMousePos();
+	    auto mouseUV = ImVec2(mousePos.x / ScaledDisplaySize().x, mousePos.y / ScaledDisplaySize().y);
+	    mousePos = {viewStart.x + mouseUV.x * viewSize.x, viewStart.y + mouseUV.y * viewSize.y};
+
+	    static bool mouseLeftDownLastFrame = false;
+	    static std::optional<std::pair<ImVec2, ImVec2>> dragStartPos = std::nullopt; //first is mouse pos, second is viewStart
+	    if(ImGui::IsMouseDown(0)){
+		    if(!dragStartPos){
+			    dragStartPos = {mouseUV, viewStart};
+		    }else{
+			    viewStart = ImVec2(dragStartPos->second.x +(- mouseUV.x + dragStartPos->first.x)*viewSize.x, dragStartPos->second.y + (mouseUV.y - dragStartPos->first.y)*viewSize.y);
+		    }
+		    mouseLeftDownLastFrame = true;
+	    }else{
+		    mouseLeftDownLastFrame = false;
+		    dragStartPos = std::nullopt;
+	    }
+
+	    float wheel = -ImGui::GetIO().MouseWheel;
+	    if(wheel != 0){
+		//now we want the mouse pos to be in the old mouse pos
+	    	appState.viewZoom *= (1+(wheel*0.1));
+	    	viewSize = ImVec2(appState.viewZoom, appState.viewZoom * (ScaledDisplaySize().y / ScaledDisplaySize().x));
+	    	ImVec2 newMousePos = {viewStart.x + mouseUV.x * viewSize.x, viewStart.y + mouseUV.y * viewSize.y};
+		viewStart = ImVec2(viewStart.x + mousePos.x - newMousePos.x, viewStart.y - mousePos.y + newMousePos.y);
+	    }
+    }
+    wasWindowFocusedLastFrame = ImGui::IsAnyItemActive() || ImGui::IsAnyItemFocused() || ImGui::IsAnyItemHovered();
+
+    EPSILON = appState.viewZoom / ScaledDisplaySize().x;
 
     ImGui::Text("FPS: %.1f", HelloImGui::FrameRate());
 
     bool someEntryChanged = false;
-
     //note:  the entryNum names are matching so focus stays after inputting a new eq
     unsigned int entryNum = 1;
     for(auto& entry : appState.entries){
@@ -393,7 +237,6 @@ void Gui(AppState& appState)
 		    //try to compile the new code
 		    auto parsed = parser::ptParse::parse(entry.eq);
 		    if(parsed){
-			    someEntryChanged = true;
 			    entry.parsedEq = parsed->value;
 			    if(std::holds_alternative<mathEngine::equation>(*entry.parsedEq)){
 				const auto& eq = std::get<mathEngine::equation>(*entry.parsedEq);
@@ -403,7 +246,11 @@ void Gui(AppState& appState)
 				const auto& eq = std::get<std::shared_ptr<mathEngine::expr>>(*entry.parsedEq);
 				entry.reducedEq = mathEngine::fullySimplify(eq->clone());	
 			    }
+		    }else{
+			entry.parsedEq = std::nullopt;
+			entry.reducedEq = std::nullopt;
 		    }
+		    someEntryChanged = true;
 	    }
 	    entry.guiFocused = ImGui::IsItemFocused();//make ImGuiTextEditCallbackData* datasure to delete entries only if they are not being currently worked on
 	    if(entry.parsedEq){
@@ -429,8 +276,25 @@ void Gui(AppState& appState)
     ImGui::InputText(("new entry###entryNum"+std::to_string(entryNum)).c_str(), &next);
     if(!next.empty()){
 		appState.entries.push_back({MyVec3{1, 0, 1}, next});
+		auto& entry = appState.entries.back();
 		next.clear();
-    }
+		auto parsed = parser::ptParse::parse(entry.eq);
+		if(parsed){
+			entry.parsedEq = parsed->value;
+			if(std::holds_alternative<mathEngine::equation>(*entry.parsedEq)){
+				const auto& eq = std::get<mathEngine::equation>(*entry.parsedEq);
+				entry.reducedEq = mathEngine::fullySimplify(eq.clone());
+			}
+			if(std::holds_alternative<std::shared_ptr<mathEngine::expr>>(*entry.parsedEq)){
+				const auto& eq = std::get<std::shared_ptr<mathEngine::expr>>(*entry.parsedEq);
+				entry.reducedEq = mathEngine::fullySimplify(eq->clone());
+			}
+		}else{
+			entry.parsedEq = std::nullopt;
+			entry.reducedEq = std::nullopt;
+		}
+		someEntryChanged = true;
+	}
 
     std::erase_if(appState.entries, [&](const auto& entry)mutable{
 		    if(entry.eq.empty() && !entry.guiFocused){
@@ -443,16 +307,23 @@ void Gui(AppState& appState)
     if(someEntryChanged){
 	  std::string newFragShader;
 	  newFragShader += GFragShaderTop;
-	  newFragShader += "int numEntries = " + std::to_string(appState.entries.size()) + ";\n";
-	  newFragShader += "vec3 entryColors[" + std::to_string(appState.entries.size()) + "];\n";
-	  std::string colorsEntry;
-	  unsigned int i=0;
 	  for(const auto& entry : appState.entries){
-		colorsEntry += "entryColors[" + std::to_string(i) + "] = vec3(" + std::to_string(entry.color.x) + ", " + std::to_string(entry.color.y) + ", " + std::to_string(entry.color.z) + ");\n";
-		i++;
+		if(!entry.reducedEq)
+			continue;
+		std::string codeEntry = "\t{\n";
+		codeEntry += "\t\tfloat val = ";
+		if(std::holds_alternative<mathEngine::equation>(*entry.reducedEq)){
+			codeEntry += std::get<mathEngine::equation>(*entry.reducedEq).getDiff()->toCode({"x", "y"}) + ";\n";
+			codeEntry += "\t\tif(abs(val) < EPSILON * " + std::to_string(appState.graphThickness) + "){\n";
+		}else if(std::holds_alternative<std::shared_ptr<mathEngine::expr>>(*entry.reducedEq)){
+			codeEntry += std::get<std::shared_ptr<mathEngine::expr>>(*entry.reducedEq)->toCode({"x", "y"}) + ";\n";
+			codeEntry += "\t\tif(abs(y-val) < EPSILON * " + std::to_string(appState.graphThickness) + "){\n";
+		}else{
+			continue;
+		}
+		codeEntry += "\t\t\tcol = vec3(" + std::to_string(entry.color.x) + ", " + std::to_string(entry.color.y) + ", " + std::to_string(entry.color.z) + ");\n\t\t}\n\t}\n";
+		newFragShader += codeEntry;
 	  }
-	  newFragShader += colorsEntry;
-	  newFragShader += "vec3 col = 0.5 + 0.5*cos(pow(" + std::to_string(entryNum) + ".0,2.0)*iTime+uv.xyx+vec3(0,2,4));";
 
 	  newFragShader += GFragShaderBottom;
 	  std::cout<<"Recompiling shader: "<<newFragShader<<std::endl;
