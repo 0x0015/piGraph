@@ -249,9 +249,10 @@ void Gui(AppState& appState)
 	    auto rawMousePos = ImGui::GetMousePos();
 	    //mouse input is wrong!!! on highdpi
 	    auto mouseUV = ImVec2(rawMousePos.x / ScaledDisplaySize().x, rawMousePos.y / ScaledDisplaySize().y);
-	    std::cout<<"mouseUV: "<<mouseUV.x<<", "<<mouseUV.y<<std::endl;
+	    mouseUV.y = 1.0f - mouseUV.y;
+	    //std::cout<<"mouseUV: "<<mouseUV.x<<", "<<mouseUV.y<<std::endl;
 	    ImVec2 mousePos = {viewStart.x + mouseUV.x * viewSize.x, viewStart.y + mouseUV.y * viewSize.y};
-	    std::cout<<"mousePos: "<<mousePos.x<<", "<<mousePos.y<<std::endl;
+	    //std::cout<<"mousePos: "<<mousePos.x<<", "<<mousePos.y<<std::endl;
 
 	    static bool mouseLeftDownLastFrame = false;
 	    static std::optional<std::pair<ImVec2, ImVec2>> dragStartPos = std::nullopt; //first is mouse pos, second is viewStart
@@ -259,7 +260,7 @@ void Gui(AppState& appState)
 		    if(!dragStartPos){
 			    dragStartPos = {mouseUV, viewStart};
 		    }else{
-			    viewStart = ImVec2(dragStartPos->second.x +(- mouseUV.x + dragStartPos->first.x)*viewSize.x, dragStartPos->second.y + (mouseUV.y - dragStartPos->first.y)*viewSize.y);
+			    viewStart = ImVec2(dragStartPos->second.x + (dragStartPos->first.x- mouseUV.x)*viewSize.x, dragStartPos->second.y + (dragStartPos->first.y - mouseUV.y)*viewSize.y);
 		    }
 		    mouseLeftDownLastFrame = true;
 	    }else{
@@ -273,12 +274,13 @@ void Gui(AppState& appState)
 	    	appState.viewZoom *= (1+(wheel*0.1));
     		viewSize = ImVec2(appState.viewZoom, appState.viewZoom * (ScaledDisplaySize().y / ScaledDisplaySize().x));
 	    	ImVec2 newMousePos = {viewStart.x + mouseUV.x * viewSize.x, viewStart.y + mouseUV.y * viewSize.y};
-		viewStart = ImVec2(viewStart.x + mousePos.x - newMousePos.x, viewStart.y - mousePos.y + newMousePos.y);
+		viewStart = ImVec2(viewStart.x + mousePos.x - newMousePos.x, viewStart.y + mousePos.y - newMousePos.y);
 	    }
     }
     wasWindowFocusedLastFrame = ImGui::IsAnyItemActive() || ImGui::IsAnyItemFocused() || ImGui::IsAnyItemHovered();
 
     EPSILON = appState.viewZoom / ScaledDisplaySize().x;
+    viewSize = ImVec2(appState.viewZoom, appState.viewZoom * (ScaledDisplaySize().y / ScaledDisplaySize().x));
 
     ImGui::Text("FPS: %.1f", HelloImGui::FrameRate());
 
