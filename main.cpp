@@ -9,6 +9,7 @@
 #include "piCalc/parser/ptParse/ptParse.hpp"
 #include "piCalc/mathEngine/expr.hpp"
 #include "piCalc/mathEngine/simplify.hpp"
+#include "piCalc/mathEngine/simplifications/evaluateDerivatives.hpp"
 
 
 /******************************************************************************
@@ -67,11 +68,28 @@ void main()
 
 std::string_view GFragShaderBottom = R"(
 	if(col.x > (1.0-EPSILON) && col.y > (1.0-EPSILON) && col.z > (1.0-EPSILON)){
-		if(mod(pos.x, 1.0) < EPSILON || mod(pos.y, 1.0) < EPSILON){
-			col = vec3(0.0, 0.0, 0.0);
+		float gridSize = 1.0;
+		float gridSizePx = gridSize / viewSize.x * iResolution.x;
+		//sorta janky code here, but works alright
+		while(gridSizePx < 10.0){
+			gridSize *= 2.0;
+			gridSizePx = gridSize / viewSize.x * iResolution.x;
+		}
+		while(gridSizePx > 40.0){
+			gridSize /= 2.0;
+			gridSizePx = gridSize / viewSize.x * iResolution.x;
+		}
+		//minor grid
+		if(mod(pos.x, gridSize) < EPSILON || mod(pos.y, gridSize) < EPSILON){
+			col = vec3(0.8, 0.8, 0.8);
+		}
+		//major grid
+		if(mod(pos.x, gridSize * 5.0) < EPSILON || mod(pos.y, gridSize * 5.0) < EPSILON){
+			col = vec3(0.3, 0.3, 0.3);
 		}
 	}
-	if(abs(pos.x) < EPSILON * 2.0 || abs(pos.y) < EPSILON * 2.0){
+	//axes
+	if(abs(pos.x) < EPSILON * 1.5 || abs(pos.y) < EPSILON * 1.5){
 		col = vec3(0.0, 0.0, 0.0);
 	}
 	gl_FragColor = vec4(col,1.0);
@@ -104,10 +122,42 @@ struct AppState
     float majorLineThickness = 2.0f;
     float minorLineThickness = 1.0f;
 
+    std::string genFragShader() const{
+	  std::string newFragShader;
+	  newFragShader += GFragShaderTop;
+	  for(const auto& entry : entries){
+		if(!entry.reducedEq)
+			continue;
+		std::string codeEntry = "\t{\n";
+		codeEntry += "\t\tfloat val = ";
+		if(std::holds_alternative<mathEngine::equation>(*entry.reducedEq)){
+			codeEntry += std::get<mathEngine::equation>(*entry.reducedEq).getDiff()->toCode({"x", "y"}) + ";\n";
+			codeEntry += "\t\tif(abs(val) < EPSILON * " + std::to_string(graphThickness) + "){\n";
+		}else if(std::holds_alternative<std::shared_ptr<mathEngine::expr>>(*entry.reducedEq)){
+			auto& expr = std::get<std::shared_ptr<mathEngine::expr>>(*entry.reducedEq);
+			codeEntry += expr->toCode({"x"}) + ";\n"; //single exprs are treated as y=..., so no y terms allowed
+			auto derivativeTry = mathEngine::simplification::evaluateDerivative(expr->clone(), "x");
+			if(derivativeTry){
+				auto derivative = mathEngine::fullySimplify(*derivativeTry)->toCode({"x"});
+				codeEntry += "\t\tif(abs(y-val) < EPSILON * " + std::to_string(graphThickness) + " * max(abs(" + derivative + "), 1.0) ){\n";
+			}else{
+				codeEntry += "\t\tif(abs(y-val) < EPSILON * " + std::to_string(graphThickness) + "){\n";
+			}
+		}else{
+			continue;
+		}
+		codeEntry += "\t\t\tcol = vec3(" + std::to_string(entry.color.x) + ", " + std::to_string(entry.color.y) + ", " + std::to_string(entry.color.z) + ");\n\t\t}\n\t}\n";
+		newFragShader += codeEntry;
+	  }
+
+	  newFragShader += GFragShaderBottom;
+	  return newFragShader;
+    }
+
     AppState()
     {
-        Uniforms.AddUniform("viewStart", ImVec2{0, 0});
-        Uniforms.AddUniform("viewSize", ImVec2{1, 1});
+        Uniforms.AddUniform("viewStart", ImVec2{-2.5f, -2.5f});
+        Uniforms.AddUniform("viewSize", ImVec2{5.0f, 5.0f});
 	Uniforms.AddUniform("EPSILON", 0.01f);
 
         Uniforms.AddUniform("iResolution", ImVec2{100.f, 100.f});
@@ -125,7 +175,7 @@ struct AppState
 
 void InitAppResources3D(AppState& appState)
 {
-	appState.ShaderProgram = CreateShaderProgram(GVertexShaderSource, (std::string(GFragShaderTop) +std::string(GFragShaderBottom)).c_str());
+	appState.ShaderProgram = CreateShaderProgram(GVertexShaderSource, appState.genFragShader().c_str());
 	appState.FullScreenQuadVAO = CreateFullScreenQuadVAO();
 	appState.StoreUniformLocations();
 }
@@ -196,9 +246,12 @@ void Gui(AppState& appState)
 
     static bool wasWindowFocusedLastFrame = false;
     if(!ImGui::IsAnyItemActive() && !ImGui::IsAnyItemFocused() && !ImGui::IsAnyItemHovered() && !wasWindowFocusedLastFrame){
-	    auto mousePos = ImGui::GetMousePos();
-	    auto mouseUV = ImVec2(mousePos.x / ScaledDisplaySize().x, mousePos.y / ScaledDisplaySize().y);
-	    mousePos = {viewStart.x + mouseUV.x * viewSize.x, viewStart.y + mouseUV.y * viewSize.y};
+	    auto rawMousePos = ImGui::GetMousePos();
+	    //mouse input is wrong!!! on highdpi
+	    auto mouseUV = ImVec2(rawMousePos.x / ScaledDisplaySize().x, rawMousePos.y / ScaledDisplaySize().y);
+	    std::cout<<"mouseUV: "<<mouseUV.x<<", "<<mouseUV.y<<std::endl;
+	    ImVec2 mousePos = {viewStart.x + mouseUV.x * viewSize.x, viewStart.y + mouseUV.y * viewSize.y};
+	    std::cout<<"mousePos: "<<mousePos.x<<", "<<mousePos.y<<std::endl;
 
 	    static bool mouseLeftDownLastFrame = false;
 	    static std::optional<std::pair<ImVec2, ImVec2>> dragStartPos = std::nullopt; //first is mouse pos, second is viewStart
@@ -218,7 +271,7 @@ void Gui(AppState& appState)
 	    if(wheel != 0){
 		//now we want the mouse pos to be in the old mouse pos
 	    	appState.viewZoom *= (1+(wheel*0.1));
-	    	viewSize = ImVec2(appState.viewZoom, appState.viewZoom * (ScaledDisplaySize().y / ScaledDisplaySize().x));
+    		viewSize = ImVec2(appState.viewZoom, appState.viewZoom * (ScaledDisplaySize().y / ScaledDisplaySize().x));
 	    	ImVec2 newMousePos = {viewStart.x + mouseUV.x * viewSize.x, viewStart.y + mouseUV.y * viewSize.y};
 		viewStart = ImVec2(viewStart.x + mousePos.x - newMousePos.x, viewStart.y - mousePos.y + newMousePos.y);
 	    }
@@ -305,29 +358,11 @@ void Gui(AppState& appState)
 		    }});
 
     if(someEntryChanged){
-	  std::string newFragShader;
-	  newFragShader += GFragShaderTop;
-	  for(const auto& entry : appState.entries){
-		if(!entry.reducedEq)
-			continue;
-		std::string codeEntry = "\t{\n";
-		codeEntry += "\t\tfloat val = ";
-		if(std::holds_alternative<mathEngine::equation>(*entry.reducedEq)){
-			codeEntry += std::get<mathEngine::equation>(*entry.reducedEq).getDiff()->toCode({"x", "y"}) + ";\n";
-			codeEntry += "\t\tif(abs(val) < EPSILON * " + std::to_string(appState.graphThickness) + "){\n";
-		}else if(std::holds_alternative<std::shared_ptr<mathEngine::expr>>(*entry.reducedEq)){
-			codeEntry += std::get<std::shared_ptr<mathEngine::expr>>(*entry.reducedEq)->toCode({"x", "y"}) + ";\n";
-			codeEntry += "\t\tif(abs(y-val) < EPSILON * " + std::to_string(appState.graphThickness) + "){\n";
-		}else{
-			continue;
-		}
-		codeEntry += "\t\t\tcol = vec3(" + std::to_string(entry.color.x) + ", " + std::to_string(entry.color.y) + ", " + std::to_string(entry.color.z) + ");\n\t\t}\n\t}\n";
-		newFragShader += codeEntry;
-	  }
-
-	  newFragShader += GFragShaderBottom;
+	  std::string newFragShader = appState.genFragShader();
 	  std::cout<<"Recompiling shader: "<<newFragShader<<std::endl;
   	  appState.ShaderProgram = CreateShaderProgram(GVertexShaderSource, newFragShader.c_str());
+	  appState.StoreUniformLocations();
+	  appState.ApplyUniforms();
     }
 
     ImGui::End();
