@@ -64,11 +64,17 @@ void main()
 	float gridSize = 1.0;
 	float gridSizePx = gridSize / viewSize.x * iResolution.x;
 	//sorta janky code here, but works alright
-	while(gridSizePx < 10.0){
+	for(int i=0;i<1000;i++){//choosing 1000 as a number that is "probably enough"
+		if(!(gridSizePx < 10.0)){
+			break;
+		}
 		gridSize *= 2.0;
 		gridSizePx = gridSize / viewSize.x * iResolution.x;
 	}
-	while(gridSizePx > 40.0){
+	for(int i=0;i<1000;i++){
+		if(!(gridSizePx > 40.0)){
+			break;
+		}
 		gridSize /= 2.0;
 		gridSizePx = gridSize / viewSize.x * iResolution.x;
 	}
