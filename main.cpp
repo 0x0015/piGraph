@@ -46,15 +46,10 @@ uniform vec2 viewSize;
 
 uniform float EPSILON;
 
+
 void main()
 {
 	vec2 fragCoord = TexCoord * iResolution;
-	float time = iTime * 0.3 + iMouse.x * 0.01;
-
-	// Compute uv based on fragCoord
-	//    vec2 uv = fragCoord / iResolution.xy;
-	//    uv = uv * 2.0 - 1.0;
-	//    uv.x *= iResolution.x / iResolution.y;
 
 	// Normalized pixel coordinates (from 0 to 1)
 	vec2 uv = fragCoord/iResolution.xy;
@@ -64,34 +59,34 @@ void main()
 	float y = pos.y;
 
 	vec3 col = vec3(1.0, 1.0, 1.0);
-)";
 
-std::string_view GFragShaderBottom = R"(
-	if(col.x > (1.0-EPSILON) && col.y > (1.0-EPSILON) && col.z > (1.0-EPSILON)){
-		float gridSize = 1.0;
-		float gridSizePx = gridSize / viewSize.x * iResolution.x;
-		//sorta janky code here, but works alright
-		while(gridSizePx < 10.0){
-			gridSize *= 2.0;
-			gridSizePx = gridSize / viewSize.x * iResolution.x;
-		}
-		while(gridSizePx > 40.0){
-			gridSize /= 2.0;
-			gridSizePx = gridSize / viewSize.x * iResolution.x;
-		}
-		//minor grid
-		if(mod(pos.x, gridSize) < EPSILON || mod(pos.y, gridSize) < EPSILON){
-			col = vec3(0.8, 0.8, 0.8);
-		}
-		//major grid
-		if(mod(pos.x, gridSize * 5.0) < EPSILON || mod(pos.y, gridSize * 5.0) < EPSILON){
-			col = vec3(0.3, 0.3, 0.3);
-		}
+	//render grid
+	float gridSize = 1.0;
+	float gridSizePx = gridSize / viewSize.x * iResolution.x;
+	//sorta janky code here, but works alright
+	while(gridSizePx < 10.0){
+		gridSize *= 2.0;
+		gridSizePx = gridSize / viewSize.x * iResolution.x;
+	}
+	while(gridSizePx > 40.0){
+		gridSize /= 2.0;
+		gridSizePx = gridSize / viewSize.x * iResolution.x;
+	}
+	//minor grid
+	if(mod(pos.x, gridSize) < EPSILON || mod(pos.y, gridSize) < EPSILON){
+		col = vec3(0.8, 0.8, 0.8);
+	}
+	//major grid
+	if(mod(pos.x, gridSize * 5.0) < EPSILON || mod(pos.y, gridSize * 5.0) < EPSILON){
+		col = vec3(0.3, 0.3, 0.3);
 	}
 	//axes
 	if(abs(pos.x) < EPSILON * 1.5 || abs(pos.y) < EPSILON * 1.5){
 		col = vec3(0.0, 0.0, 0.0);
 	}
+)";
+
+std::string_view GFragShaderBottom = R"(
 	gl_FragColor = vec4(col,1.0);
 }
 )";
@@ -366,6 +361,17 @@ void Gui(AppState& appState)
 	  appState.StoreUniformLocations();
 	  appState.ApplyUniforms();
     }
+
+    /*
+    //draw labels to background
+    auto bgDrawList = ImGui::GetForegroundDrawList();
+    const auto drawAxislabel = [&](ImVec2 pos, ImVec4 color, float val){
+	    ImVec2 rlPos = {(pos.x - viewSize.x) / viewSize.x * ScaledDisplaySize().x, (pos.y - viewSize.y) / viewSize.y * ScaledDisplaySize().y};
+	    bgDrawList->AddText(rlPos, ImGui::ColorConvertFloat4ToU32(color), std::to_string(val).c_str());
+    };
+
+    drawAxislabel({0, 0}, {0, 0, 1, 1}, 3.14);
+    */
 
     ImGui::End();
 }
