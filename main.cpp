@@ -140,7 +140,7 @@ struct AppState
 			auto derivativeTry = mathEngine::simplification::evaluateDerivative(expr->clone(), "x");
 			if(derivativeTry){
 				auto derivative = mathEngine::fullySimplify(*derivativeTry)->toCode({"x"});
-				codeEntry += "\t\tif(abs(y-val) < EPSILON * " + std::to_string(graphThickness) + " * max(abs(" + derivative + "), 1.0) ){\n";
+				codeEntry += "\t\tif(abs(y-val) < EPSILON * " + std::to_string(graphThickness) + " * max(abs(" + derivative + "), 1.0) ){\n";//note.  this maybe should be rethought for functions where the derivative isn't asways defined, for example Dx 1/x = ln(x) isn't defined for x < 0
 			}else{
 				codeEntry += "\t\tif(abs(y-val) < EPSILON * " + std::to_string(graphThickness) + "){\n";
 			}
