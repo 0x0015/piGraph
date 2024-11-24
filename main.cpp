@@ -8,6 +8,7 @@
 #include <algorithm>
 #include "piCalc/parser/ptParse/ptParse.hpp"
 #include "piCalc/mathEngine/expr.hpp"
+#include "piCalc/mathEngine/exprs/exponent.hpp"
 #include "piCalc/mathEngine/simplify.hpp"
 #include "piCalc/mathEngine/simplifications/evaluateDerivatives.hpp"
 
@@ -45,15 +46,23 @@ uniform vec2 viewStart;
 uniform vec2 viewSize;
 
 uniform float EPSILON;
+#define SMALL_EPSILON (1e-7) //small unchanging epsilon
 
+float altPow(float base, float exp){
+	if(base < 0.0){
+		if(abs(float(int(exp)) - exp) < SMALL_EPSILON){ //if exp is (within error) an integer
+			if(abs(mod(exp, 2.0) - 1.0) < SMALL_EPSILON) //if exp % 2 == 1 (within error)
+				return pow(-base, exp) * -1.0;
+		}
+	}
+	
+	return pow(base, exp);
+}
 
-void main()
-{
-	vec2 fragCoord = TexCoord * iResolution;
+float num_samples = 0.0;
 
-	// Normalized pixel coordinates (from 0 to 1)
-	vec2 uv = fragCoord/iResolution.xy;
-
+vec3 getFragPos(vec2 uv){
+	num_samples += 1.0;
 	vec2 pos = viewStart + vec2(uv.x * viewSize.x, uv.y * viewSize.y);
 	float x = pos.x;
 	float y = pos.y;
@@ -93,7 +102,40 @@ void main()
 )";
 
 std::string_view GFragShaderBottom = R"(
-	gl_FragColor = vec4(col,1.0);
+	return col;
+}
+
+#define do_samples //make this a settings toggle or something eventually
+
+void main(){
+	vec2 fragCoord = TexCoord * iResolution;
+
+	// Normalized pixel coordinates (from 0 to 1)
+	vec2 uv = fragCoord/iResolution.xy;
+
+	vec3 fragColor = getFragPos(uv);
+    
+	#ifdef do_samples //based on https://computergraphics.stackexchange.com/a/12738
+	float offset = 1.0 / max(iResolution.x, iResolution.y) * 0.4; //0.4 seemed to give best results (0.5 was too blurry for my liking, but 0.3 didn't smooth enough)
+	// samples in +/- x direction
+	fragColor += getFragPos(uv + vec2( offset, 0.0));
+	fragColor += getFragPos(uv + vec2( -offset, 0.0));
+	
+	// samples in +/- y direction
+	fragColor += getFragPos(uv + vec2( 0.0, offset ));
+	fragColor += getFragPos(uv + vec2( 0.0, -offset));
+	
+	// samples at diagonals
+	fragColor += getFragPos(uv + vec2(offset, offset));
+	fragColor += getFragPos(uv + vec2(-offset, offset));
+	fragColor += getFragPos(uv + vec2(offset, -offset));
+	fragColor += getFragPos(uv + vec2(-offset, -offset));
+	#endif
+	
+	// compute average
+	fragColor /= num_samples;
+
+	gl_FragColor = vec4(fragColor ,1.0);
 }
 )";
 
@@ -409,6 +451,8 @@ int main(int , char *[])
     runnerParams.callbacks.ShowGui = [&appState]() { Gui(appState); };
     // CustomBackground is called every frame, and is used to display the custom background
     runnerParams.callbacks.CustomBackground = [&appState]() { CustomBackground(appState); };
+
+    mathEngine::exprs::exponent::exponentCodeFuncName = "altPow";
 
     // Let's go!
     HelloImGui::Run(runnerParams);
